@@ -79,37 +79,50 @@ def _simulate_one(
 
     # --- 공구 마모: 누적되다가 교체하면 0으로 ---
     tool_life = spec["tool_life"]
-    wear_rate = 1.0 + 0.6 * duty  # 부하 클수록 빨리 닳음
-    wear = np.zeros(n_minutes)
+    wear_rate = 1.0 + 0.6 * duty  # 부하 클수록 빨리 닳음(기본은 1.0씩)
+    wear = np.zeros(n_minutes)  # 결과 담을 빈 배열
     acc = rng.uniform(0, 60)  # 시작 시점 마모도는 랜덤
-    limit = tool_life * rng.uniform(0.90, 1.15)
+    limit = tool_life * rng.uniform(0.90, 1.15)  # 공구 언제 교체할지 한계값
     for i in range(n_minutes):  # 마모가 누적적이면서 조건부 리셋 위해 for 루프
         acc += wear_rate[i]
         if acc > limit:  # 계획 교체 (정비반 재량으로 조금씩 다름)
             acc = 0.0  # 이번 분의 마모량 = 직전 분의 마모량 + 오늘 닳은 양, 한계를 넘으면 0으로 리셋
             limit = tool_life * rng.uniform(0.90, 1.15)
-        wear[i] = acc
+        wear[i] = acc  # 톱니파 모양
 
     # --- 회전수: 부하에 반비례(무거운 절삭일수록 저속) ---
-    rpm = 2860 - 1500 * duty + rng.normal(0, 45, n_minutes)
-    rpm = np.clip(rpm, 1150, 2900)
+    rpm = (
+        2860 - 1500 * duty + rng.normal(0, 45, n_minutes)
+    )  # 부하 클수록 rpm 낮아지도록 설계 + 측정 노이즈
+    rpm = np.clip(rpm, 1150, 2900)  # 물리적으로 가능한 회전수 제한
 
     # --- 토크: 부하에 비례, 마모되면 저항 증가 ---
     torque = 10 + 40 * duty + 0.02 * wear + rng.normal(0, 2.0, n_minutes)
     torque = np.clip(torque, 3.0, 80.0)
 
     # --- 냉각(HVAC) 이상: 가끔 공장 공조가 죽어 실내가 더워짐 ---
-    hvac_fail = np.zeros(n_minutes, dtype=bool)
+    hvac_fail = np.zeros(
+        n_minutes, dtype=bool
+    )  # n_minutes 길이의 불리언 배열을 전부 False로 초기화
     for _ in range(max(1, n_minutes // 2000)):
-        s = rng.integers(0, max(1, n_minutes - 120))
-        hvac_fail[s : s + rng.integers(40, 120)] = True
-    air = air + 5.5 * hvac_fail  # 실내 온도 상승
+        s = rng.integers(0, max(1, n_minutes - 120))  # 이상 시작 지점 무작위로 고름
+        hvac_fail[s : s + rng.integers(40, 120)] = (
+            True  # 시작 시점 s부터, 40~120분 사이 무작위 길이만큼 True로 표시
+        )
+    air = air + 5.5 * hvac_fail  # True인 구간만 실내 온도 5.5 상승
 
     # --- 공정 온도: 공기온도 + 절삭열. 쿨런트가 process 쪽은 어느 정도 잡아줌 ---
-    power_w = torque * rpm * 2 * np.pi / 60.0  # [W]
-    proc = air + 8.5 + power_w / 1400.0 + 0.004 * wear
-    proc = proc - 6.0 * hvac_fail  # 온도차(방열 여력)가 줄어듦
-    proc = proc + rng.normal(0, 0.12, n_minutes)
+    power_w = torque * rpm * 2 * np.pi / 60.0  # 전력[W]
+    proc = (
+        air + 8.5 + power_w / 1400.0 + 0.004 * wear
+    )  # 공정 온도,  8.5는 기본적 열 상승분(고정값)
+    proc = proc - 6.0 * hvac_fail  # 냉각 이상 발생 시 온도차(방열 여력)가 줄어듦
+    proc = proc + rng.normal(0, 0.12, n_minutes)  # 측정 노이즈 더함
+
+    # [온도]
+    # 공기온도(환경) → 기본 열상승(고정) → 전력에 의한 열(부하) → 마모에 의한 열(소폭)
+    #                                                    → HVAC 고장이면 방열 여력 줄어듦(추가 보정)
+    #                                                    → + 노이즈
 
     # --- 진동: 마모·회전수에 비례. 마모 후반에 급격히 커짐 ---
     vib = (
@@ -117,16 +130,20 @@ def _simulate_one(
         + 0.0009 * rpm
         + 0.9 * (wear / tool_life) ** 3
         + rng.normal(0, 0.06, n_minutes)
-    )
-    vib = np.clip(vib, 0.1, None)
+    )  # 기저 진동 + 회전수 비례 진동 + 수명에 연관된 진동 패턴
+    vib = np.clip(vib, 0.1, None)  # 하한값 0.1, 상한값 제한 없음
 
     # --- 전류: 전력/전압(380V, 역률 0.85, 3상) ---
-    current = power_w / (380 * 1.732 * 0.85) + rng.normal(0, 0.15, n_minutes)
-    current = np.clip(current, 0.2, None)
+    current = power_w / (380 * 1.732 * 0.85) + rng.normal(
+        0, 0.15, n_minutes
+    )  # 전력으로 전류 역산
+    current = np.clip(current, 0.2, None)  # 하한값 0.2, 상한값 제한 없음
 
     # --- 습도: 온도와 약한 음의 관계 ---
-    humid = 55 - 1.8 * (air - 298) + rng.normal(0, 2.5, n_minutes)
-    humid = np.clip(humid, 15, 95)
+    humid = (
+        55 - 1.8 * (air - 298) + rng.normal(0, 2.5, n_minutes)
+    )  # 기준 습도 + 온도 오르면 습도 내려감
+    humid = np.clip(humid, 15, 95)  # 노이즈 더하고, 15~95% 범위로 clip
 
     df = pd.DataFrame(
         {
@@ -142,7 +159,7 @@ def _simulate_one(
             "current_a": current,
             "humidity_pct": humid,
         }
-    )
+    )  # 따로따로 계산한 numpy 배열들 한 데이터프레임으로 묶기
 
     # ------------------------------------------------------------------
     # 고장 라벨 (AI4I 2020 정의 그대로)
