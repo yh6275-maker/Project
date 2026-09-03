@@ -6,6 +6,7 @@ data/history/*.csv 만 있으면 언제든 DB를 다시 만들 수 있습니다.
 
     python src/build_db.py
 """
+
 from __future__ import annotations
 
 import sys
@@ -14,7 +15,7 @@ from pathlib import Path
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import db as dbmod   # noqa: E402
+import db as dbmod  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 HIST = ROOT / "data" / "history"
@@ -33,11 +34,11 @@ def main() -> int:
 
     con = dbmod.connect(dbp)
     total_in = total_ins = 0
-    for f in files:
+    for f in files:  # csv 파일을 하나씩 순회하며 읽어 db.py의 upsert()로 넣음
         df = pd.read_csv(f)
         ins, skip = dbmod.upsert(con, df)
         total_in += len(df)
-        total_ins += ins
+        total_ins += ins  # 신규 삽입 수, 중복 스킵 수 누적
         print(f"  {f.name:<20} 읽음 {len(df):>6,} / 신규 {ins:>6,} / 중복 {skip:>5,}")
     n = con.execute("SELECT COUNT(*) FROM sensor_raw").fetchone()[0]
     con.close()
