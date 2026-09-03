@@ -99,3 +99,13 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+# 1) 옵션 파싱 (--minutes, --end, --db, --hist)
+# 2) 폴더 준비
+# 3) fetch() 호출 (에러나면 안전하게 종료 코드 1로 끝냄)
+# 4) 빈 데이터면 종료 코드 0으로 정상 종료
+# 5) CSV: 같은 날 기존 파일 있으면 합치고 중복 제거 후 저장 (1차 방어선)
+# 6) DB: upsert로 적재 (UNIQUE 제약이 2차 방어선)
+# 7) collect_log에 이력 남김
+# 8) 사람이 읽기 좋은 요약 출력, 종료 코드 반환
