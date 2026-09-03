@@ -75,7 +75,7 @@ def _simulate_one(
     # 사인파 - 예측 가능, 24시간 주기 (낮/밤 일교차)
     # cumsum 랜덤워크 - 느리게, 누적으로 표류 (며칠에 걸친 날씨 변화)
     # 순간 노이즈 - 매 순간 독립적 - 센서 측정 오차
-    # 이 세가지를 겹쳐 쌓으면 리듬이 보이는 자연스러운 시계열이 만들어짐!
+    # 이 세가지를 겹쳐 쌓으면 리듬이 보이는 자연스러운 시계열이 만들어짐 !
 
     # --- 공구 마모: 누적되다가 교체하면 0으로 ---
     tool_life = spec["tool_life"]
@@ -83,10 +83,10 @@ def _simulate_one(
     wear = np.zeros(n_minutes)
     acc = rng.uniform(0, 60)  # 시작 시점 마모도는 랜덤
     limit = tool_life * rng.uniform(0.90, 1.15)
-    for i in range(n_minutes):
+    for i in range(n_minutes):  # 마모가 누적적이면서 조건부 리셋 위해 for 루프
         acc += wear_rate[i]
         if acc > limit:  # 계획 교체 (정비반 재량으로 조금씩 다름)
-            acc = 0.0
+            acc = 0.0  # 이번 분의 마모량 = 직전 분의 마모량 + 오늘 닳은 양, 한계를 넘으면 0으로 리셋
             limit = tool_life * rng.uniform(0.90, 1.15)
         wear[i] = acc
 
