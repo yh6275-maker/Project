@@ -164,10 +164,14 @@ def _simulate_one(
     # ------------------------------------------------------------------
     # 고장 라벨 (AI4I 2020 정의 그대로)
     # ------------------------------------------------------------------
-    twf = (wear >= 200) & (wear <= 240) & (rng.random(n_minutes) < 0.004)
-    hdf = ((proc - air) < 8.6) & (rpm < 1380)
-    pwf = (power_w < 3500) | (power_w > 9000)
-    osf = (wear * torque) > spec["osf_limit"]
+    twf = (
+        (wear >= 200) & (wear <= 240) & (rng.random(n_minutes) < 0.004)
+    )  # 공구 마모 고장 (200~240분 구간에서 0.4의 확률)
+    hdf = ((proc - air) < 8.6) & (rpm < 1380)  # 방열 실패
+    pwf = (power_w < 3500) | (power_w > 9000)  # 전력 이상 (너무 낮거나 너무 높을 때)
+    osf = (wear * torque) > spec[
+        "osf_limit"
+    ]  # 과부하 (마모된 공구로 큰 토크 쓰면 위험)
     rnf = rng.random(n_minutes) < 0.0002  # 원인 불명 랜덤 고장
 
     df["twf"] = twf.astype(int)
@@ -185,10 +189,15 @@ def simulate_truth(
 ) -> pd.DataFrame:
     """오염 없는 참값을 생성합니다."""
     rng = np.random.default_rng(seed)
-    start = pd.Timestamp(start)
+    start = pd.Timestamp(start)  # 문자열 timestamp 타입으로 변환
     parts = [_simulate_one(m, n_minutes, start, rng) for m in MACHINES]
-    out = pd.concat(parts, ignore_index=True)
-    return out.sort_values(["ts", "machine_id"]).reset_index(drop=True)
+    # 딕셔너리 순환하며 각 설비마다 물리 기반 참값 생성. rng를 세 번 호출 모두에 똑같이 넘기며 랜덤 패턴 달라짐
+    out = pd.concat(
+        parts, ignore_index=True
+    )  # 세 설비의 데이터프레임(parts 리스트 안 3개) 세로로 이어붙인 후 인덱스 매김
+    return out.sort_values(["ts", "machine_id"]).reset_index(
+        drop=True
+    )  # [시각, ID] 순으로 다시 정렬 후 인덱스 재정렬
 
 
 # ----------------------------------------------------------------------
@@ -226,18 +235,24 @@ def pollute(
         c.update(cfg)
     rng = np.random.default_rng(seed)
     df = truth.copy()
-    masks = pd.DataFrame(index=df.index)
+    masks = pd.DataFrame(index=df.index)  # 어디에 뭘 주입했는지 기록할 빈 데이터프레임
 
     # 관측 데이터에는 참값 라벨 중 machine_failure만 남깁니다.
     # (현장에서도 세부 고장코드는 정비 후에야 붙습니다)
-    df = df.drop(columns=["twf", "hdf", "pwf", "osf", "rnf", "power_w"])
+    df = df.drop(
+        columns=["twf", "hdf", "pwf", "osf", "rnf", "power_w"]
+    )  # 세부 고장 코드와 전력값 제거
 
     t0 = df["ts"].min()
-    days = (df["ts"] - t0).dt.total_seconds() / 86400.0
+    days = (
+        df["ts"] - t0
+    ).dt.total_seconds() / 86400.0  # 각 행이 "며칠째인지"를 미리 계산
 
     # --- (a) 센서 드리프트: CNC-02 온도 센서만 서서히 밀림 ---
-    m2 = df["machine_id"] == "CNC-02"
-    df.loc[m2, "process_temp_k"] += c["drift_per_day"] * days[m2]
+    m2 = df["machine_id"] == "CNC-02"  # CNC-02인 행만 True
+    df.loc[m2, "process_temp_k"] += (
+        c["drift_per_day"] * days[m2]
+    )  # CNC-02의 공정온도만 골라서 드리프트
 
     # --- (b) 단위 혼재: 특정 구간에서 온도가 섭씨로 들어옴 ---
     n = len(df)
@@ -247,35 +262,39 @@ def pollute(
         s = rng.integers(0, n - 200)
         unit_block[s : s + 200] = True
     df.loc[unit_block, "air_temp_k"] -= 273.15
-    df.loc[unit_block, "process_temp_k"] -= 273.15
-    masks["unit_temp"] = unit_block
+    df.loc[unit_block, "process_temp_k"] -= (
+        273.15  # 그 구간에서 들어오는 값 섭씨로 바꾸기
+    )
+    masks["unit_temp"] = unit_block  # 어디 바꿨는지 기록
     # 진동 단위도 일부는 m/s^2 로 (×9.81)
     vib_block = rng.random(n) < 0.04
     df.loc[vib_block, "vibration_mms"] *= 9.81
     masks["unit_vib"] = vib_block
 
     # --- (c) 센서 튐: 값이 순간적으로 10~50배 또는 0 ---
-    for col in SENSOR_COLS:
+    for col in SENSOR_COLS:  # 8개 센서 컬럼 하나씩 순회
         hit = rng.random(n) < c["spike_rate"]
         mode = rng.random(n)
         df.loc[hit & (mode < 0.5), col] = df.loc[hit & (mode < 0.5), col] * rng.uniform(
             8, 40
-        )
-        df.loc[hit & (mode >= 0.5), col] = 0.0
+        )  # 튀는 케이스 중 절반은 원래 값의 8~40배로 튐
+        df.loc[hit & (mode >= 0.5), col] = 0.0  # 나머지 절반은 0으로 떨어짐
         masks[f"spike_{col}"] = hit
 
     # --- (d) 개별 결측 ---
     for col in SENSOR_COLS:
-        hit = rng.random(n) < c["nan_rate"]
+        hit = rng.random(n) < c["nan_rate"]  # 0.8% 확률로 걸린 셀 NaN으로 바꿈
         df.loc[hit, col] = np.nan
         masks[f"nan_{col}"] = hit
 
     # --- (e) 통신 끊김: 행 자체가 사라짐 ---
     drop_mask = np.zeros(n, dtype=bool)
-    n_drop = int(n * c["dropout_rate"] / 10)
+    n_drop = int(n * c["dropout_rate"] / 10)  # n_drop개의 끊김 이벤트 만듦
     for _ in range(max(1, n_drop)):
         s = rng.integers(0, n)
-        ln = rng.integers(*c["dropout_len"]) * 3  # 설비 3대 × 분
+        ln = (
+            rng.integers(*c["dropout_len"]) * 3
+        )  # 설비 3대 × 분 (시각당 3행 형태라 분 수 * 설비 수 만큼의 행을 지워야 함)
         drop_mask[s : s + ln] = True
     masks["dropped"] = drop_mask
     keep = ~drop_mask
@@ -296,11 +315,14 @@ def pollute(
     n3 = len(df)
     jitter = np.where(
         rng.random(n3) < c["ts_jitter_rate"], rng.integers(-90, 90, n3), 0
-    )
+    )  # np.where(조건, A, B)는 "조건이 True면 A, False면 B"
+    # 5% 확률로 걸리면 -90~90초 사이 무작위 흔들림을, 안 걸리면 0
     df["ts"] = df["ts"] + pd.to_timedelta(jitter, unit="s")
     kept_masks["ts_jittered"] = jitter != 0
-    order = rng.permutation(n3)
-    df = df.iloc[order].reset_index(drop=True)
+    order = rng.permutation(n3)  # 0~n3-1까지 숫자를 무작위로 섞은 배열 만듦
+    df = df.iloc[order].reset_index(
+        drop=True
+    )  # 그 순서대로 행 재배치하여 시간순이 아닌 뒤죽박죽 섞인 상태
     kept_masks = kept_masks.iloc[order].reset_index(drop=True)
 
     # --- (h) 실제 수집기가 붙이는 메타 컬럼 ---
@@ -309,6 +331,19 @@ def pollute(
     if return_masks:
         return df, kept_masks
     return df
+
+
+# truth(참값)
+#   → 세부 고장코드·전력 제거 (현장엔 없는 정보)
+#   → (a) 드리프트: CNC-02만 서서히 밀림
+#   → (b) 단위혼재: 블록 구간에서 온도(K→℃), 개별 행에서 진동(mm/s→m/s²)
+#   → (c) 스파이크: 셀 단위, 뻥튀기 or 0
+#   → (d) 개별 결측: 셀 단위 NaN
+#   → (e) 통신끊김: 행 자체 삭제 ★ (여기서 gap이 생기고 7단계론 못 채움)
+#   → (f) 중복: 행 복제해서 이어붙임
+#   → (g) 타임스탬프 흔들림 + 전체 순서 셔플
+#   → (h) collected_at 붙이고, ts를 문자열로
+# → observed(현장급 데이터)
 
 
 # ----------------------------------------------------------------------

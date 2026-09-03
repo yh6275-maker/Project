@@ -17,6 +17,7 @@ GitHub Actions가 하루 한 번 이 파일을 실행합니다.
    그래서 CSV만 커밋하고, DB는 CSV로부터 언제든 재생성합니다(build_db.py).
    이 구조를 면접에서 설명하면 "재현 가능한 파이프라인"을 아는 사람으로 보입니다.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -25,10 +26,12 @@ from pathlib import Path
 
 import pandas as pd
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(
+    0, str(Path(__file__).resolve().parent)
+)  # 이 파일과 같은 폴더에 있는 파일 우선적으로 찾기
 
-import db as dbmod              # noqa: E402
-from simulator import sample_window   # noqa: E402
+import db as dbmod  # noqa: E402
+from simulator import sample_window  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 HIST = ROOT / "data" / "history"
@@ -45,20 +48,21 @@ def fetch(minutes: int, end: str | None = None) -> pd.DataFrame:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser()  # argparse : 터미널에서 실행할 때 넘기는 옵션을 파이썬 코드 안에서 쓸 수 있게 해주는 라이브러리
     ap.add_argument("--minutes", type=int, default=1440, help="수집할 구간 길이(분)")
     ap.add_argument("--end", default=None, help="구간 끝 시각(기본: 지금)")
     ap.add_argument("--db", default=str(dbmod.DB_PATH))
     ap.add_argument("--hist", default=str(HIST), help="일별 CSV 저장 폴더")
-    args = ap.parse_args()
+    args = ap.parse_args()  # 터미널에서 넘어온 값들을 읽어 args 객체에 닮음.
+    # 이후 코드에서 arg.minutes, args.end처럼 속성으로 접근할 수 있게 됨
 
-    hist = Path(args.hist)
+    hist = Path(args.hist)  # 문자열을 다시 Path 객체로 바꿈
     hist.mkdir(parents=True, exist_ok=True)
 
     try:
         raw = fetch(args.minutes, args.end)
-    except Exception as e:                       # 수집 실패해도 워크플로는 죽지 않게
-        print(f"[ERROR] 수집 실패: {type(e).__name__}: {e}")
+    except Exception as e:  # 수집 실패해도 워크플로는 죽지 않게
+        print(f"[ERROR] 수집 실패: {type(e).__name__}: {e}")  # 에러 종류, 에러 메시지
         return 1
 
     if raw.empty:
@@ -77,10 +81,13 @@ def main() -> int:
     raw.to_csv(csv_path, index=False)
 
     con = dbmod.connect(args.db)
-    inserted, skipped = dbmod.upsert(con, raw)
-    dbmod.log_run(con, w_start, w_end, len(raw), inserted, skipped,
-                  note=f"csv={csv_path.name}")
-    total = con.execute("SELECT COUNT(*) FROM sensor_raw").fetchone()[0]
+    inserted, skipped = dbmod.upsert(con, raw)  # DB 레벨 중복 방어(UNIQUE 제약)
+    dbmod.log_run(
+        con, w_start, w_end, len(raw), inserted, skipped, note=f"csv={csv_path.name}"
+    )
+    total = con.execute("SELECT COUNT(*) FROM sensor_raw").fetchone()[
+        0
+    ]  # DB에 누적된 전체 행수 SQL로 세어봄
     con.close()
 
     print(f"[OK] window {w_start} ~ {w_end}")
