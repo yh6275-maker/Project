@@ -1,0 +1,16 @@
+{
+  "n_rows": 53811,
+  "n_features": 100,
+  "horizon_min": 30,
+  "train_end": "2024-01-11 12:17:00",
+  "test_start": "2024-01-11 12:17:00",
+  "positive_rate_test": 0.2373,
+  "roc_auc": 0.9034,
+  "pr_auc": 0.7592,
+  "threshold": 0.035,
+  "precision": 0.3383,
+  "recall": 0.9859,
+  "f1": 0.5037,
+  "cost_at_threshold": 2207400000,
+  "cost_at_0.5": 9055300000
+}
