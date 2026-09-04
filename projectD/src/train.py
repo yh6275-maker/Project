@@ -83,9 +83,9 @@ def main() -> int:
 
     # ------------ 여기까지 데이터 준비 단계 ------------
 
-    X = d[feat].values
-    y = d["y"].values.astype(int)
-    cut = int(len(d) * 0.75)  # ★ 시간순 split
+    X = d[feat].values  # 피처 컬럼들만 뽑아서 numpy 배열로
+    y = d["y"].values.astype(int)  # 라벨 int 변환
+    cut = int(len(d) * 0.75)  # ★ 시간순 split -> 앞 75%는 훈련용, 뒤 25% 테스트용
     print(
         f"\ntrain {cut:,} / test {len(d) - cut:,} | "
         f"train 양성률 {y[:cut].mean() * 100:.2f}% / test {y[cut:].mean() * 100:.2f}%"
@@ -93,10 +93,10 @@ def main() -> int:
 
     mdl = RandomForestClassifier(
         n_estimators=300, random_state=SEED, n_jobs=-1, min_samples_leaf=2
-    )
-    mdl.fit(X[:cut], y[:cut])
-    p = mdl.predict_proba(X[cut:])[:, 1]
-    yt = y[cut:]
+    )  # 트리 300개 만들어서 앙살블/트리 생성 시 무작위성 고정해서 재현 가능하게/병렬로 학습/샘플 2개 이상은 무조건 가져야 함(과적합 방지)
+    mdl.fit(X[:cut], y[:cut])  # 학습 수행
+    p = mdl.predict_proba(X[cut:])[:, 1]  # 0,1에 속할 확률 중 1인 고장일 확률만 뽑음
+    yt = y[cut:]  # 테스트 구간 정답 라벨
 
     # 비용 최소 임계값
     ths = np.linspace(0.01, 0.99, 197)
