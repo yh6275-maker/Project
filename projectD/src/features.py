@@ -8,27 +8,37 @@
    rolling은 반드시 과거만 봐야 합니다. center=True는 미래를 봅니다 — 절대 금지.
    shift(1)까지 넣어 "현재 값도 안 보는" 엄격한 버전을 쓸지는 문제에 따라 정합니다.
 """
+
 from __future__ import annotations
 
 import numpy as np
 import pandas as pd
 
-BASE = ["air_temp_k", "process_temp_k", "rot_speed_rpm", "torque_nm",
-        "tool_wear_min", "vibration_mms", "current_a", "humidity_pct"]
+BASE = [
+    "air_temp_k",
+    "process_temp_k",
+    "rot_speed_rpm",
+    "torque_nm",
+    "tool_wear_min",
+    "vibration_mms",
+    "current_a",
+    "humidity_pct",
+]
 
 
 def add_physics(df: pd.DataFrame) -> pd.DataFrame:
     """도메인 지식으로 만드는 파생변수. 모델보다 이게 성능을 더 올립니다."""
     df = df.copy()
-    df["temp_diff_k"] = df["process_temp_k"] - df["air_temp_k"]        # 방열 여력
+    df["temp_diff_k"] = df["process_temp_k"] - df["air_temp_k"]  # 방열 여력
     df["power_w"] = df["torque_nm"] * df["rot_speed_rpm"] * 2 * np.pi / 60
-    df["wear_torque"] = df["tool_wear_min"] * df["torque_nm"]          # 과부하 지표(OSF)
+    df["wear_torque"] = df["tool_wear_min"] * df["torque_nm"]  # 과부하 지표(OSF)
     df["vib_per_rpm"] = df["vibration_mms"] / df["rot_speed_rpm"].replace(0, np.nan)
     return df
 
 
-def add_rolling(df: pd.DataFrame, cols=None, windows=(10, 30, 60),
-                shift_one: bool = True) -> pd.DataFrame:
+def add_rolling(
+    df: pd.DataFrame, cols=None, windows=(10, 30, 60), shift_one: bool = True
+) -> pd.DataFrame:
     """설비별 과거 window분 통계.
 
     shift_one=True면 현재 시점 값을 제외합니다(t-1까지만 사용).
@@ -43,18 +53,23 @@ def add_rolling(df: pd.DataFrame, cols=None, windows=(10, 30, 60),
     for c in cols:
         s = g[c]
         for w in windows:
-            base = s.shift(1) if shift_one else df[c]
+            base = (
+                s.shift(1) if shift_one else df[c]
+            )  # 각 값을 한 칸 뒤로 밀어서 지금 시점에서 확실히 알고 있는 과거 값들만 씀 (보수적 접근)
             r = base.groupby(df["machine_id"]).rolling(w, min_periods=max(2, w // 3))
-            new[f"{c}_m{w}"] = r.mean().reset_index(level=0, drop=True)
+            new[f"{c}_m{w}"] = r.mean().reset_index(
+                level=0, drop=True
+            )  # 10/30/60분 세 가지 window로 평균, 표준편차 만듦
             new[f"{c}_s{w}"] = r.std().reset_index(level=0, drop=True)
         # 변화량 (기울기 대용)
-        new[f"{c}_d1"] = s.diff()
+        new[f"{c}_d1"] = s.diff()  # 1분전/10분전 대비 변화량
         new[f"{c}_d10"] = s.diff(10)
     return pd.concat([df, pd.DataFrame(new, index=df.index)], axis=1)
 
 
-def make_horizon_label(df: pd.DataFrame, horizon: int = 30,
-                       src: str = "machine_failure", out: str = "y") -> pd.DataFrame:
+def make_horizon_label(
+    df: pd.DataFrame, horizon: int = 30, src: str = "machine_failure", out: str = "y"
+) -> pd.DataFrame:
     """★ 예지보전의 진짜 목표변수: "앞으로 horizon분 안에 고장이 나는가"
 
     이걸 안 하고 '지금 고장인가'를 맞히면 그건 예지(prediction)가 아니라
@@ -66,7 +81,11 @@ def make_horizon_label(df: pd.DataFrame, horizon: int = 30,
 
     def fwd(s: pd.Series) -> pd.Series:
         # 뒤집어서 rolling → 다시 뒤집으면 '미래 창'이 됩니다
-        return s[::-1].rolling(horizon, min_periods=1).max()[::-1].shift(-1)
+        return (
+            s[::-1].rolling(horizon, min_periods=1).max()[::-1].shift(-1)
+        )  # 시리즈를 거꾸로 뒤집어서 원래 미래였던 방향을 과거 방향으로 30개(30분)을 보고,그 안에 machine_failure가 하나라도 1이면 표시
+
+    # 다시 원래 순서로 돌린 후 .shift(-1)로 값 한 칸 앞으로 당김. -> 현재 시점 빼고 지금 이후 미래만 영향 (예지!)
 
     df[out] = df.groupby("machine_id")[src].transform(fwd)
     return df
@@ -76,9 +95,34 @@ def build(df: pd.DataFrame, windows=(10, 30, 60), shift_one=True) -> pd.DataFram
     return add_rolling(add_physics(df), windows=windows, shift_one=shift_one)
 
 
-def feature_columns(df: pd.DataFrame) -> list[str]:
-    drop = {"ts", "machine_id", "type", "machine_failure", "collected_at",
-            "id", "is_gap", "spike_any", "spike_count"}
-    return [c for c in df.columns
-            if c not in drop and not c.startswith("spike_")
-            and pd.api.types.is_numeric_dtype(df[c])]
+# add_physics()와 add_rolling()을 순서대로 이어서 실행하는 짧은 진입점
+
+
+def feature_columns(df: pd.DataFrame) -> list[str]:  # 모델에 넣을 컬럼 자동 선택
+    drop = {
+        "ts",
+        "machine_id",
+        "type",
+        "machine_failure",
+        "collected_at",
+        "id",
+        "is_gap",
+        "spike_any",
+        "spike_count",
+    }
+    return [
+        c
+        for c in df.columns
+        if c not in drop
+        and not c.startswith("spike_")
+        and pd.api.types.is_numeric_dtype(
+            df[c]
+        )  # 마지막 안전장치 -> 위 조건 다 통과해도, 숫자 아니면 걸러냄
+    ]
+
+
+# add_physics()         → 물리 조합 피처 4개 (온도차, 전력, 마모×토크, 진동/rpm)
+# add_rolling()          → shift(1)+rolling으로 "과거만 보는" 추세·변동성 피처
+# make_horizon_label()   → shift(-1)+역방향rolling으로 "미래 30분 고장 여부" 라벨
+# build()                → add_physics + add_rolling 묶은 진입점
+# feature_columns()      → 학습에 쓸 수 있는 숫자형 컬럼만 자동 필터링
