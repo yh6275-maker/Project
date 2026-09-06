@@ -3,6 +3,7 @@ A1. 수집 파이프라인 · 오염 · 정제 · ★참값 대조 검증
 =====================================================
 참값을 갖고 있으므로 "내 전처리가 맞았는지"를 숫자로 증명할 수 있습니다.
 """
+
 from _common import ROOT, rule, save
 import matplotlib.pyplot as plt
 import numpy as np
@@ -17,48 +18,85 @@ SEED = 42
 
 # ----------------------------------------------------------------------
 rule("A1-1. 참값 생성 — 물리 기반 시뮬레이터")
-truth = simulate_truth(n_minutes=1440 * DAYS, start="2024-01-01", seed=SEED)
+truth = simulate_truth(
+    n_minutes=1440 * DAYS, start="2024-01-01", seed=SEED
+)  # 1440*14일 = 20,160분치 참값 만듦
 print("설비 수     :", truth["machine_id"].nunique())
 print("기간        :", truth["ts"].min(), "~", truth["ts"].max())
 print("행 수       :", f"{len(truth):,}")
 print("\n[고장 모드별 건수]")
-modes = truth[["twf", "hdf", "pwf", "osf", "rnf", "machine_failure"]].sum()
-tbl = pd.DataFrame({"건수": modes,
-                    "비율(%)": (modes / len(truth) * 100).round(3)})
+modes = truth[
+    ["twf", "hdf", "pwf", "osf", "rnf", "machine_failure"]
+].sum()  # 각 고장 컬럼(0/1).sum()
+tbl = pd.DataFrame(
+    {"건수": modes, "비율(%)": (modes / len(truth) * 100).round(3)}
+)  # 건수, 비율 두 열을 가진 표 새로 만듦
 print(tbl.to_string())
-print(f"\n★ 전체 고장률 {truth['machine_failure'].mean()*100:.3f}% "
-      f"— 정상이 {(1-truth['machine_failure'].mean())*100:.3f}%")
+print(
+    f"\n★ 전체 고장률 {truth['machine_failure'].mean() * 100:.3f}% "  # 1의 비율 = 고장률
+    f"— 정상이 {(1 - truth['machine_failure'].mean()) * 100:.3f}%"
+)
+
 
 print("\n[센서 요약]")
-cols = ["air_temp_k", "process_temp_k", "rot_speed_rpm", "torque_nm",
-        "tool_wear_min", "vibration_mms", "current_a", "power_w"]
-print(truth[cols].describe().loc[["mean", "std", "min", "50%", "max"]].round(2).to_string())
+cols = [
+    "air_temp_k",
+    "process_temp_k",
+    "rot_speed_rpm",
+    "torque_nm",
+    "tool_wear_min",
+    "vibration_mms",
+    "current_a",
+    "power_w",
+]
+print(
+    truth[cols]
+    .describe()  # pandas 요약통계 함수 -> count/mean/std/min/25%/50%/75%/max를 다 보여줌
+    .loc[["mean", "std", "min", "50%", "max"]]
+    .round(2)
+    .to_string()
+)
+# 오염/정제 전, 애초에 참값 자체가 정상적으로 잘 만들었는지 확인
+
 
 # ----------------------------------------------------------------------
 rule("A1-2. 오염 주입 — 현장에서 받는 데이터로 변환")
-obs, masks = pollute(truth, seed=7, return_masks=True)   # masks = 주입 정답지
+obs, masks = pollute(truth, seed=7, return_masks=True)  # masks = 주입 정답지
 print("참값 행수   :", f"{len(truth):,}")
-print("관측 행수   :", f"{len(obs):,}", f"({len(obs)-len(truth):+,})")
+print(
+    "관측 행수   :", f"{len(obs):,}", f"({len(obs) - len(truth):+,})"
+)  # 부호 표시(참값보다 늘었는지 줄었는지)
 print("\n[관측 데이터 첫 3행 — 정렬도 안 되어 있고 단위도 섞여 있습니다]")
 print(obs.head(3).to_string())
 
 print("\n[결측률 %]")
-sens = ["air_temp_k", "process_temp_k", "rot_speed_rpm", "torque_nm",
-        "tool_wear_min", "vibration_mms", "current_a", "humidity_pct"]
-print((obs[sens].isna().mean() * 100).round(2).to_string())
+sens = [
+    "air_temp_k",
+    "process_temp_k",
+    "rot_speed_rpm",
+    "torque_nm",
+    "tool_wear_min",
+    "vibration_mms",
+    "current_a",
+    "humidity_pct",
+]
+print((obs[sens].isna().mean() * 100).round(2).to_string())  # NaN 비율
 
 print("\n[단위 혼재 흔적 — 온도가 300 근처와 30 근처로 두 덩어리]")
 print(obs["air_temp_k"].describe().round(2).to_string())
 print("200 K 미만 비율: %.2f%%" % ((obs["air_temp_k"] < 200).mean() * 100))
+# 몇 %가 섭씨 데이터였는지 확인
 
 print("\n[중복 — (machine_id, ts) 기준]")
-d = obs.duplicated(subset=["machine_id", "ts"]).sum()
+d = obs.duplicated(
+    subset=["machine_id", "ts"]
+).sum()  # duplicated(subset=[...])은 "이 컬럼 조합이 이전에 나온 적 있으면 True"
 print(f"중복 행: {d:,}건")
 
 print("\n[주입 정답지 — 무엇을 얼마나 넣었나]")
-inj = pd.DataFrame({"건수": masks.sum(),
-                    "비율(%)": (masks.mean() * 100).round(3)})
+inj = pd.DataFrame({"건수": masks.sum(), "비율(%)": (masks.mean() * 100).round(3)})
 print(inj.to_string())
+# 각 오염 종류별로 몇 건씩 오염 주입됐는지
 
 # ----------------------------------------------------------------------
 rule("A1-3. 정제 파이프라인 실행")
@@ -70,48 +108,68 @@ print(pd.Series(rep["range"]).to_string())
 print("\n[짧은 결측 보간 건수]")
 print(pd.Series(rep["filled"]).to_string())
 print("\n[드리프트 추정 기울기 (K/day)]")
-print(pd.Series(rep["drift_slopes"]).round(4).to_string())
+print(
+    pd.Series(rep["drift_slopes"]).round(4).to_string()
+)  # clean.py의 드리프트 추정 로직이 얼마나 정확하게 실제 오염 크기 맞췄는지 확인
+# -> CNC-02 추정 기울기 : 0.34, 실제 주입값 : 0.35
 print(f"★ 시뮬레이터에 넣은 참값: CNC-02에 {POLLUTION['drift_per_day']} K/day")
+# 정제 파이프라인 자체가 내놓은 자체 보고서 확인(몇 개 고쳤는지, 드리프트 얼마로 추정했는지)
 
 # ----------------------------------------------------------------------
 rule("A1-4. ★ 참값 대조 — 전처리가 원래 값을 얼마나 되찾았나")
 # 시간을 분에 스냅했으므로 (machine_id, ts)로 조인됩니다
-t = truth.copy()
-t["ts"] = t["ts"].dt.round("min")
-m = clean.merge(t[["machine_id", "ts"] + sens], on=["machine_id", "ts"],
-                how="inner", suffixes=("_c", "_t"))
-print("대조 가능 행:", f"{len(m):,} / 참값 {len(truth):,} "
-      f"({len(m)/len(truth)*100:.1f}%)")
+t = truth.copy()  # 참값 복사해두고
+t["ts"] = t["ts"].dt.round("min")  # 복사본 ts 반올림
+m = clean.merge(
+    t[["machine_id", "ts"] + sens],
+    on=["machine_id", "ts"],
+    how="inner",
+    suffixes=("_c", "_t"),  # _c : 정제한 값, _t : 참값
+)  # 같은 설비, 시각 기준으로 두 데이터프레임 이어붙임
+print(
+    "대조 가능 행:",
+    f"{len(m):,} / 참값 {len(truth):,} ({len(m) / len(truth) * 100:.1f}%)",
+)
 row_ok = m["air_temp_k_c"].notna() | m["process_temp_k_c"].notna()
-print(f"행 자체가 살아있는 비율 : {m['is_gap'].eq(False).mean()*100:.2f}% "
-      f"(나머지는 통신 끊김 구간 — 값이 아예 없습니다)")
+print(
+    f"행 자체가 살아있는 비율 : {m['is_gap'].eq(False).mean() * 100:.2f}% "  # gap이 아닌(실제 값이 있는) 행의 비율
+    f"(나머지는 통신 끊김 구간 — 값이 아예 없습니다)"
+)
 
 rows = []
 for c in sens:
     a, b = m[f"{c}_c"], m[f"{c}_t"]
     ok = a.notna() & b.notna()
     err = (a[ok] - b[ok]).abs()
-    rows.append({
-        "센서": c,
-        "값보유율%": round(ok.mean() * 100, 2),
-        "MAE": round(err.mean(), 4),
-        "p95_err": round(err.quantile(0.95), 4),
-        "max_err": round(err.max(), 3),
-        "참값std": round(b.std(), 3),
-    })
+    rows.append(
+        {
+            "센서": c,
+            "값보유율%": round(ok.mean() * 100, 2),
+            "MAE": round(err.mean(), 4),
+            "p95_err": round(err.quantile(0.95), 4),
+            "max_err": round(err.max(), 3),
+            "참값std": round(b.std(), 3),
+        }
+    )
 comp = pd.DataFrame(rows)
 comp["MAE/std"] = (comp["MAE"] / comp["참값std"]).round(4)
 print(comp.to_string(index=False))
 print("\n★ MAE/std 가 0.05 미만이면 '원래 값을 사실상 되찾았다'고 봅니다.")
 print("★ p95_err이 0인 센서가 많습니다 = 95% 이상의 행은 오차가 정확히 0.")
-print("  MAE를 만드는 건 소수의 못 잡은 스파이크입니다. 평균만 보면 안 되는 이유입니다.")
+print(
+    "  MAE를 만드는 건 소수의 못 잡은 스파이크입니다. 평균만 보면 안 되는 이유입니다."
+)
 
 # 정제 안 했을 때와 비교
 raw_obs = obs.copy()
 raw_obs["ts"] = pd.to_datetime(raw_obs["ts"]).dt.round("min")
 raw_obs = raw_obs.drop_duplicates(subset=["machine_id", "ts"])
-m0 = raw_obs.merge(t[["machine_id", "ts"] + sens], on=["machine_id", "ts"],
-                   how="inner", suffixes=("_c", "_t"))
+m0 = raw_obs.merge(
+    t[["machine_id", "ts"] + sens],
+    on=["machine_id", "ts"],
+    how="inner",
+    suffixes=("_c", "_t"),
+)
 print("\n[정제 전 vs 정제 후 MAE 비교]")
 cmp_rows = []
 for c in sens:
@@ -119,16 +177,26 @@ for c in sens:
     e0 = (m0.loc[ok0, f"{c}_c"] - m0.loc[ok0, f"{c}_t"]).abs().mean()
     ok1 = m[f"{c}_c"].notna() & m[f"{c}_t"].notna()
     e1 = (m.loc[ok1, f"{c}_c"] - m.loc[ok1, f"{c}_t"]).abs().mean()
-    cmp_rows.append({"센서": c, "정제전MAE": round(e0, 3), "정제후MAE": round(e1, 4),
-                     "개선배수": round(e0 / e1, 1) if e1 > 0 else np.inf})
+    cmp_rows.append(
+        {
+            "센서": c,
+            "정제전MAE": round(e0, 3),
+            "정제후MAE": round(e1, 4),
+            "개선배수": round(e0 / e1, 1) if e1 > 0 else np.inf,
+        }
+    )
 print(pd.DataFrame(cmp_rows).to_string(index=False))
 
 # ----------------------------------------------------------------------
 rule("A1-5. ★ 탐지 규칙 채점 — 주입 정답지와 대조")
 # 정답지(masks)는 관측 데이터(obs)와 행 순서가 같습니다.
 # 그러니 '정제 규칙을 obs에 그대로 적용'한 뒤 정답지로 채점하면 됩니다.
-from clean import (coerce_types, detect_and_fix_temp_unit,   # noqa: E402
-                   detect_vibration_unit, PHYS_RANGE)
+from clean import (
+    coerce_types,
+    detect_and_fix_temp_unit,  # noqa: E402
+    detect_vibration_unit,
+    PHYS_RANGE,
+)
 
 o2 = obs.copy()
 for cc in sens:
@@ -138,13 +206,21 @@ for cc in sens:
 def score(pred, gt, name):
     pred = np.asarray(pred, dtype=bool)
     gt = np.asarray(gt, dtype=bool)
-    tp = int((pred & gt).sum()); fp = int((pred & ~gt).sum())
+    tp = int((pred & gt).sum())
+    fp = int((pred & ~gt).sum())
     fn = int((~pred & gt).sum())
     prec = tp / (tp + fp) if (tp + fp) else float("nan")
     rec = tp / (tp + fn) if (tp + fn) else float("nan")
-    return {"규칙": name, "실제": int(gt.sum()), "탐지": int(pred.sum()),
-            "TP": tp, "FP": fp, "FN": fn,
-            "정밀도": round(prec, 3), "재현율": round(rec, 3)}
+    return {
+        "규칙": name,
+        "실제": int(gt.sum()),
+        "탐지": int(pred.sum()),
+        "TP": tp,
+        "FP": fp,
+        "FN": fn,
+        "정밀도": round(prec, 3),
+        "재현율": round(rec, 3),
+    }
 
 
 res = []
@@ -153,7 +229,9 @@ res.append(score(o2["air_temp_k"] < 200, masks["unit_temp"], "온도단위(air<2
 res.append(score(o2["process_temp_k"] < 200, masks["unit_temp"], "온도단위(proc<200K)"))
 # (2) 진동 단위: "설비 중앙값의 4배 초과" — 통계적 기준(근거가 약함)
 med = o2.groupby("machine_id")["vibration_mms"].transform("median")
-res.append(score(o2["vibration_mms"] > med * 4, masks["unit_vib"], "진동단위(중앙값×4)"))
+res.append(
+    score(o2["vibration_mms"] > med * 4, masks["unit_vib"], "진동단위(중앙값×4)")
+)
 print(pd.DataFrame(res).to_string(index=False))
 
 print("\n[임계값을 흔들어 봅니다 — 둘 다 놀랄 만큼 안정적입니다]")
@@ -161,7 +239,9 @@ sens_rows = []
 for th in [150, 180, 200, 250, 273]:
     sens_rows.append(score(o2["air_temp_k"] < th, masks["unit_temp"], f"온도 <{th}K"))
 for r in [1.2, 1.5, 2.0, 4.0, 6.0]:
-    sens_rows.append(score(o2["vibration_mms"] > med * r, masks["unit_vib"], f"진동 ×{r}"))
+    sens_rows.append(
+        score(o2["vibration_mms"] > med * r, masks["unit_vib"], f"진동 ×{r}")
+    )
 print(pd.DataFrame(sens_rows).to_string(index=False))
 print("""
 ★ 솔직하게 씁니다. 저는 '진동 규칙은 임계값에 민감할 것'이라 예상했는데,
@@ -176,13 +256,17 @@ print("""
 # --- 진짜 고장을 하나 심고 규칙이 어떻게 반응하는지 본다 ---
 o4 = o2.copy()
 fault_idx = o4.index[(o4["machine_id"] == "CNC-03") & o4["vibration_mms"].notna()][:400]
-o4.loc[fault_idx, "vibration_mms"] = o4.loc[fault_idx, "vibration_mms"] * 5.0  # 베어링 이상
+o4.loc[fault_idx, "vibration_mms"] = (
+    o4.loc[fault_idx, "vibration_mms"] * 5.0
+)  # 베어링 이상
 med4 = o4.groupby("machine_id")["vibration_mms"].transform("median")
 rule_hit = o4["vibration_mms"] > med4 * 4
 n_fault_killed = int(rule_hit.loc[fault_idx].sum())
 print(f"  심은 '진짜 베어링 이상' 행    : {len(fault_idx)}건 (진동 5배)")
-print(f"  단위 규칙이 잡아서 9.81로 나눈 행: {n_fault_killed}건 "
-      f"({n_fault_killed/len(fault_idx)*100:.1f}%)")
+print(
+    f"  단위 규칙이 잡아서 9.81로 나눈 행: {n_fault_killed}건 "
+    f"({n_fault_killed / len(fault_idx) * 100:.1f}%)"
+)
 print(f"  → 고장 신호가 {n_fault_killed}건 사라졌습니다. 규칙은 '잘 동작'했는데도요.")
 print("""
 ★★ 결론: 통계적 단위 판정은 '지금 데이터에 고장이 별로 없을 때만' 잘 맞습니다.
@@ -233,18 +317,30 @@ fig, axes = plt.subplots(1, 3, figsize=(13, 3.6))
 obs_num = pd.to_numeric(obs["air_temp_k"], errors="coerce")
 n_hi = int((obs_num > 350).sum())
 axes[0].hist(obs_num.dropna(), bins=np.linspace(-20, 350, 120), color="#c53030")
-axes[0].set_xlim(-20, 350)          # ★ 스파이크(최대 5054)를 잘라야 두 덩어리가 보입니다
-axes[0].set_title(f"관측: 공기온도 (단위 혼재)\n※ 350K 초과 스파이크 {n_hi}건은 축에서 제외",
-                  fontsize=10)
+axes[0].set_xlim(-20, 350)  # ★ 스파이크(최대 5054)를 잘라야 두 덩어리가 보입니다
+axes[0].set_title(
+    f"관측: 공기온도 (단위 혼재)\n※ 350K 초과 스파이크 {n_hi}건은 축에서 제외",
+    fontsize=10,
+)
 axes[0].set_xlabel("air_temp_k")
-axes[0].annotate("섭씨(℃)로\n들어온 구간", xy=(26, 2800),
-                 xytext=(0.22, 0.42), textcoords="axes fraction",
-                 fontsize=9, ha="center",
-                 arrowprops=dict(arrowstyle="->", lw=1))
-axes[0].annotate("정상(켈빈)", xy=(299, 12000),
-                 xytext=(0.55, 0.72), textcoords="axes fraction",
-                 fontsize=9, ha="center",
-                 arrowprops=dict(arrowstyle="->", lw=1))
+axes[0].annotate(
+    "섭씨(℃)로\n들어온 구간",
+    xy=(26, 2800),
+    xytext=(0.22, 0.42),
+    textcoords="axes fraction",
+    fontsize=9,
+    ha="center",
+    arrowprops=dict(arrowstyle="->", lw=1),
+)
+axes[0].annotate(
+    "정상(켈빈)",
+    xy=(299, 12000),
+    xytext=(0.55, 0.72),
+    textcoords="axes fraction",
+    fontsize=9,
+    ha="center",
+    arrowprops=dict(arrowstyle="->", lw=1),
+)
 axes[1].hist(clean["air_temp_k"].dropna(), bins=80, color="#2b6cb0")
 axes[1].set_title("정제 후: 공기온도")
 axes[1].set_xlabel("air_temp_k")
@@ -253,7 +349,8 @@ for mid, g in dd.groupby("machine_id"):
     axes[2].plot(g["d"], g["resid"], marker="o", ms=3, label=mid)
 axes[2].axhline(0, color="gray", lw=0.8)
 axes[2].set_title("드리프트: 일별 잔차(설비-라인중앙값)")
-axes[2].set_xlabel("경과 일"); axes[2].set_ylabel("잔차(K)")
+axes[2].set_xlabel("경과 일")
+axes[2].set_ylabel("잔차(K)")
 axes[2].legend(fontsize=8)
 fig.tight_layout()
 save(fig, "clean_effect")
@@ -271,5 +368,7 @@ except Exception as e:
 truth.to_csv(ROOT / "data" / "truth_sim.csv", index=False)
 print("saved: truth_sim.csv")
 print("\n행수 회계:")
-print(f"  참값 {len(truth):,} → 관측 {len(obs):,} → 중복제거 {log.frame().iloc[3]['행수']:,}"
-      f" → 재색인 {len(clean):,}")
+print(
+    f"  참값 {len(truth):,} → 관측 {len(obs):,} → 중복제거 {log.frame().iloc[3]['행수']:,}"
+    f" → 재색인 {len(clean):,}"
+)

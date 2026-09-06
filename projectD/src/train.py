@@ -99,25 +99,37 @@ def main() -> int:
     yt = y[cut:]  # 테스트 구간 정답 라벨
 
     # 비용 최소 임계값
-    ths = np.linspace(0.01, 0.99, 197)
+    ths = np.linspace(
+        0.01, 0.99, 197
+    )  # 0.01부터 0.99까지 197개 숫자 만듦(후보 임계값 만드는 과정, 극단값은 제외)
     costs = []
     for t in ths:
         tn, fp, fn, tp = confusion_matrix(
-            yt, (p >= t).astype(int), labels=[0, 1]
+            yt,
+            (p >= t).astype(int),
+            labels=[0, 1],  # 예측 확률이 임계값 이상이면 1(고장 예측), 아니면 0
         ).ravel()
-        costs.append(fn * COST_FN + fp * COST_FP)
+        costs.append(
+            fn * COST_FN + fp * COST_FP
+        )  # 이 임계값을 썼을 때 실제 비용이 얼마인가
     i = int(np.argmin(costs))
-    th = float(ths[i])
+    th = float(ths[i])  # 비용이 가장 낮았던 임계값
+
+    # 보통은 임계값으로 0.5를 쓰지만 여기서는 비용 최소점을 구해 쓴다
 
     metrics = {
         "n_rows": int(len(d)),
         "n_features": len(feat),
         "horizon_min": HORIZON,
         "train_end": str(d["ts"].iloc[cut - 1]),
-        "test_start": str(d["ts"].iloc[cut]),
+        "test_start": str(
+            d["ts"].iloc[cut]
+        ),  # 훈련 구간이 정확히 어느 시각에서 끝나고 테스트가 어디서 시작하는지 기록
         "positive_rate_test": round(float(yt.mean()), 4),
         "roc_auc": round(float(roc_auc_score(yt, p)), 4),
-        "pr_auc": round(float(average_precision_score(yt, p)), 4),
+        "pr_auc": round(
+            float(average_precision_score(yt, p)), 4
+        ),  # 임계값과 무관하게 모델이 전반적으로 얼마나 잘 순위를 매기는지 보는 지표
         "threshold": round(th, 3),
         "precision": round(
             float(precision_score(yt, (p >= th).astype(int), zero_division=0)), 4
@@ -125,15 +137,22 @@ def main() -> int:
         "recall": round(
             float(recall_score(yt, (p >= th).astype(int), zero_division=0)), 4
         ),
-        "f1": round(float(f1_score(yt, (p >= th).astype(int), zero_division=0)), 4),
-        "cost_at_threshold": int(costs[i]),
-        "cost_at_0.5": int(costs[int(np.argmin(np.abs(ths - 0.5)))]),
+        "f1": round(
+            float(f1_score(yt, (p >= th).astype(int), zero_division=0)), 4
+        ),  # (p >= th)로 방금 찾은 최적 임계값을 실제로 적용해서 나온 0/1 예측을 기준으로 계산
+        "cost_at_threshold": int(
+            costs[i]
+        ),  # 방금 찾은 최적 임계값(th)을 썼을 때의 비용
+        "cost_at_0.5": int(
+            costs[int(np.argmin(np.abs(ths - 0.5)))]
+        ),  # 후보 중 0.5에 가장 가까운 것 찾아 관행대로 했을 때의 비용
     }
     print("\n[성능]")
     for k, v in metrics.items():
         print(f"  {k:<20} {v}")
 
     imp = pd.Series(mdl.feature_importances_, index=feat).sort_values(ascending=False)
+    # mdl.feature_importances_는 RandomForest가 학습하면서 "각 피처가 예측에 얼마나 기여했는지"를 자동으로 계산해주는 속성
     print("\n[변수 중요도 상위 10]")
     print(imp.head(10).round(4).to_string())
 
@@ -158,6 +177,10 @@ def main() -> int:
     )
     return 0
 
+
+# metrics.json: 한글이 안 깨지고 사람이 읽기 좋게 들여쓰기(indent=2)된 JSON으로 저장
+# feature_importance.csv: 중요도 상위 30개
+# test_predictions.csv: 테스트 구간의 시각, 설비ID, 실제값, 예측확률을 나란히 저장 — 이게 나중에 13장 Streamlit 대시보드가 읽어다 쓸 파일
 
 if __name__ == "__main__":
     raise SystemExit(main())
