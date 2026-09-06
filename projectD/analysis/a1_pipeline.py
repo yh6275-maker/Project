@@ -139,20 +139,24 @@ print(
 rows = []
 for c in sens:
     a, b = m[f"{c}_c"], m[f"{c}_t"]
-    ok = a.notna() & b.notna()
-    err = (a[ok] - b[ok]).abs()
+    ok = a.notna() & b.notna()  # a는 정제값, b는 참값. 둘 다 값이 있을 때만 비교
+    err = (a[ok] - b[ok]).abs()  # 오차 -> 정제로 얼마나 원래 값에 가깝게 되돌렸는지
     rows.append(
         {
             "센서": c,
-            "값보유율%": round(ok.mean() * 100, 2),
-            "MAE": round(err.mean(), 4),
-            "p95_err": round(err.quantile(0.95), 4),
-            "max_err": round(err.max(), 3),
-            "참값std": round(b.std(), 3),
+            "값보유율%": round(ok.mean() * 100, 2),  # 비교 가능한 행 비율
+            "MAE": round(err.mean(), 4),  # 오차들의 평균 -> 평균적으로 얼마나 틀렸는지
+            "p95_err": round(
+                err.quantile(0.95), 4
+            ),  # 오차의 95번째 백분위수 -> 상위 5%의 나쁜 경우는 얼마나 틀렸는지
+            "max_err": round(err.max(), 3),  # 가장 심하게 틀린 경우
+            "참값std": round(
+                b.std(), 3
+            ),  # 참값 자체의 표준편차 -> 오차의 크기를 비교할 기준선
         }
     )
 comp = pd.DataFrame(rows)
-comp["MAE/std"] = (comp["MAE"] / comp["참값std"]).round(4)
+comp["MAE/std"] = (comp["MAE"] / comp["참값std"]).round(4)  # 작을수록 오차 적은 것
 print(comp.to_string(index=False))
 print("\n★ MAE/std 가 0.05 미만이면 '원래 값을 사실상 되찾았다'고 봅니다.")
 print("★ p95_err이 0인 센서가 많습니다 = 95% 이상의 행은 오차가 정확히 0.")
@@ -161,9 +165,9 @@ print(
 )
 
 # 정제 안 했을 때와 비교
-raw_obs = obs.copy()
+raw_obs = obs.copy()  # 정제 전혀 안 한 원본 오염 데이터(obs)와 참값 비교
 raw_obs["ts"] = pd.to_datetime(raw_obs["ts"]).dt.round("min")
-raw_obs = raw_obs.drop_duplicates(subset=["machine_id", "ts"])
+raw_obs = raw_obs.drop_duplicates(subset=["machine_id", "ts"])  # 중복만 방지
 m0 = raw_obs.merge(
     t[["machine_id", "ts"] + sens],
     on=["machine_id", "ts"],
@@ -182,7 +186,9 @@ for c in sens:
             "센서": c,
             "정제전MAE": round(e0, 3),
             "정제후MAE": round(e1, 4),
-            "개선배수": round(e0 / e1, 1) if e1 > 0 else np.inf,
+            "개선배수": round(e0 / e1, 1)
+            if e1 > 0
+            else np.inf,  # 정제가 오차를 몇 배나 줄였는지 계산. 만약 정제 후 MAE가 0이면 무한대로 개선됐다로 표시하는 안전장치
         }
     )
 print(pd.DataFrame(cmp_rows).to_string(index=False))
@@ -197,20 +203,29 @@ from clean import (
     detect_vibration_unit,
     PHYS_RANGE,
 )
+# clean.py의 개별 함수들(detect_and_fix_temp_unit, detect_vibration_unit, PHYS_RANGE)을 집어서 다시 import
+# -> 각 판정 규칙 하나하나를 따로 떼어내서 정답지(masks)와 직접 대조
+
 
 o2 = obs.copy()
 for cc in sens:
-    o2[cc] = pd.to_numeric(o2[cc], errors="coerce")
+    o2[cc] = pd.to_numeric(
+        o2[cc], errors="coerce"
+    )  # 오염된 원본 복사 후 숫자로 강제 변환
 
 
 def score(pred, gt, name):
-    pred = np.asarray(pred, dtype=bool)
-    gt = np.asarray(gt, dtype=bool)
-    tp = int((pred & gt).sum())
-    fp = int((pred & ~gt).sum())
-    fn = int((~pred & gt).sum())
-    prec = tp / (tp + fp) if (tp + fp) else float("nan")
-    rec = tp / (tp + fn) if (tp + fn) else float("nan")
+    pred = np.asarray(pred, dtype=bool)  # 우리 규칙이 문제 있다고 판정한 것과
+    gt = np.asarray(gt, dtype=bool)  # 실제 정답지 비교
+    tp = int((pred & gt).sum())  # 규칙도 맞다고 하고 실제로도 맞은 경우
+    fp = int((pred & ~gt).sum())  # 규칙은 맞다고 했는데 실제로는 틀린 경우
+    fn = int((~pred & gt).sum())  # 규칙은 아니라고 했는데 실제로는 맞은 경우
+    prec = (
+        tp / (tp + fp) if (tp + fp) else float("nan")
+    )  # 정밀도 - 규칙이 맞다고 한 것 중 진짜 맞은 비율
+    rec = (
+        tp / (tp + fn) if (tp + fn) else float("nan")
+    )  # 재현율 - 진짜 정답 중 규칙이 잡아낸 비율
     return {
         "규칙": name,
         "실제": int(gt.sum()),
@@ -273,11 +288,14 @@ print("""
    정작 잡아야 할 고장이 오면 그걸 단위 오류로 오인해 지웁니다.
    → 단위 문제는 '태그 단위표(메타데이터)'로 푸는 게 맞습니다.
      메타데이터가 없으면, 최소한 '보정한 행'을 로그로 남겨 나중에 되짚을 수 있게 하세요.""")
+# detect_vibration_unit()의 판정 기준이 "중앙값의 4배를 넘으면 단위 오류"
+# 진짜 베어링 고장도 진동을 비정상적으로 튀게 만듦.
+# 값이 비정상적으로 크다는 현상 하나만으로는 그게 단위 실수인지 진짜 고장인지 구분할 방법 없음
 
 print("\n[스파이크 탐지 — 물리범위 검사 + Hampel 필터]")
 sp = []
 o3, _ = detect_and_fix_temp_unit(o2)
-o3, _ = detect_vibration_unit(o3)
+o3, _ = detect_vibration_unit(o3)  # 단위오류 먼저 잡기
 o3 = o3.copy()
 o3["ts_dt"] = pd.to_datetime(o3["ts"])
 order = o3.sort_values(["machine_id", "ts_dt"]).index
@@ -285,9 +303,12 @@ for c in sens:
     lo, hi = PHYS_RANGE[c]
     out_of_range = o3[c].notna() & ~o3[c].between(lo, hi)
     s = o3.loc[order, c]
+    # 물리범위 검사 하나만으로 스파이크 얼마나 잡나
     ham = hampel_flag(s, 11, 5.0).reindex(o3.index).fillna(False)
+    # Hampel까지 추가
     sp.append(score(out_of_range, masks[f"spike_{c}"], f"{c} 범위검사"))
     sp.append(score(out_of_range | ham, masks[f"spike_{c}"], f"{c} 범위+Hampel"))
+
 print(pd.DataFrame(sp).to_string(index=False))
 print("\n★ 재현율이 100%가 아닌 이유: '0으로 튄' 스파이크 중 일부는 원래 값이")
 print("  작아서 물리범위 안에 들어옵니다. 통계적으로도 구분이 안 됩니다.")
@@ -312,6 +333,9 @@ for ax in axes:
 axes[2].set_xlabel("시각")
 fig.tight_layout()
 save(fig, "sim_truth")
+# CNC-01의 이틀치(1440*2분) 참값을 뽑아서, 마모/토크/진동을 3단 그래프로 그림.
+# axvline(x, color="crimson", ...)로 고장이 발생한 시각마다 세로 빨간 선을 그어서,
+# "마모가 쌓이다가 이 시점에 고장이 났다"는 걸 시각적으로 보여줌.
 
 fig, axes = plt.subplots(1, 3, figsize=(13, 3.6))
 obs_num = pd.to_numeric(obs["air_temp_k"], errors="coerce")
@@ -347,7 +371,7 @@ axes[1].set_xlabel("air_temp_k")
 dd = rep["drift_daily"]
 for mid, g in dd.groupby("machine_id"):
     axes[2].plot(g["d"], g["resid"], marker="o", ms=3, label=mid)
-axes[2].axhline(0, color="gray", lw=0.8)
+axes[2].axhline(0, color="gray", lw=0.8)  # 설비별로 일별 잔차 상세표 그림
 axes[2].set_title("드리프트: 일별 잔차(설비-라인중앙값)")
 axes[2].set_xlabel("경과 일")
 axes[2].set_ylabel("잔차(K)")
@@ -372,3 +396,11 @@ print(
     f"  참값 {len(truth):,} → 관측 {len(obs):,} → 중복제거 {log.frame().iloc[3]['행수']:,}"
     f" → 재색인 {len(clean):,}"
 )
+
+# A1-1: 참값 생성 → 물리적으로 말이 되는지 점검
+# A1-2: 오염 주입 → 오염이 의도대로 들어갔는지 점검 (masks 확보)
+# A1-3: 정제 실행 → run_pipeline의 부가 리포트(rep) 검토
+# A1-4: ★ 참값 대조 → MAE/std로 "값을 얼마나 되찾았나" 정량화
+# A1-5: ★ 탐지 규칙 채점 → masks와 대조해 정밀도/재현율 계산 + 진짜 고장을 심어 규칙을 속이는 실험
+# A1-6: 그림 저장 → 시각적 증거
+# A1-7: 결과 저장 → a3_leakage.py가 이어받을 clean_sim 파일 생성
