@@ -157,6 +157,9 @@ models = {
         n_estimators=300, class_weight="balanced", random_state=SEED, n_jobs=-1
     ),
 }
+# 4가지 모델을 딕셔너리로 정의
+# class_weight="balanced"를 주면, sklearn이 자동으로 소수 클래스(고장)에 더 큰 가중치를 줘서,
+# 모델이 "고장"도 무시하지 못하게 강제
 rows, probs = [], {}
 for name, mdl in models.items():
     mdl.fit(Xtr, ytr)
@@ -174,6 +177,7 @@ for name, mdl in models.items():
             "PR-AUC": round(average_precision_score(yte, p), 4),
         }
     )
+# 4개 모델 학습/예측하면서 6가지 지표(정확도, 정밀도, 재현율, F1, ROC-AUC, PR-AUC) 계산해서 rows에 쌓음
 base = pd.DataFrame(rows)
 base.loc[len(base)] = {
     "모델": "무조건정상",
@@ -184,13 +188,17 @@ base.loc[len(base)] = {
     "ROC-AUC": 0.5,
     "PR-AUC": round(yte.mean(), 4),
 }
-print(base.to_string(index=False))
+print(base.to_string(index=False))  # 맨 끝에 무조건 정상도 추가해서 비교
 print(f"""
 ★ 읽는 법
   - 정확도는 전부 0.96~0.98입니다. 모델을 구분하지 못합니다. 쓸모없는 지표입니다.
   - PR-AUC의 기준선은 '고장률' 자체입니다 = {yte.mean():.4f}.
     이것보다 얼마나 높은지가 진짜 성능입니다.
   - ROC-AUC는 불균형에서 낙관적으로 보입니다. 고장률 3%면 PR-AUC를 보세요.""")
+# ROC-AUC는 "정상을 정상이라고 맞히는 것"과 "고장을 고장이라고 맞히는 것"을 똑같은 비중으로 평가
+# 반면 PR-AUC는 정상 맞히기를 아예 신경 안 쓰고, "고장을 얼마나 잘 잡느냐"에만 집중
+# 정확도는 이 상황에서 아예 쓸모가 없고, ROC-AUC는 실제보다 좋아 보이게 착시를 일으키니,
+# PR-AUC를, 그것도 "고장률"이라는 기준선과 비교해서 봐야 진짜 성능을 알 수 있다 !!
 
 print("\n[랜덤포레스트 상세 리포트]")
 best = "랜덤포레스트"
@@ -209,18 +217,25 @@ print(
 rule("A2-5. ROC와 PR 곡선 — 같은 모델, 다른 인상")
 fig, axes = plt.subplots(1, 2, figsize=(11.5, 4.4))
 for name in ["로지스틱", "랜덤포레스트"]:
-    fpr, tpr, _ = roc_curve(yte, probs[name])
+    fpr, tpr, _ = roc_curve(
+        yte, probs[name]
+    )  # 임계값 0~1 바꿔가면서 각 임계값의 FPR(거짓양성률)과 TPR(재현율)을 계산해서 쌍으로 돌려줌 -> ROC 곡선
     axes[0].plot(
         fpr, tpr, lw=1.6, label=f"{name} (AUC={roc_auc_score(yte, probs[name]):.3f})"
-    )
-    pr, rc, _ = precision_recall_curve(yte, probs[name])
+    )  # x축이 FPR, y축이 TPR인 ROC 곡선
+    pr, rc, _ = precision_recall_curve(
+        yte, probs[name]
+    )  # 같은 방식으로 재현율과 정밀도 쌍 -> PR 곡선
     axes[1].plot(
         rc,
         pr,
         lw=1.6,
         label=f"{name} (AP={average_precision_score(yte, probs[name]):.3f})",
-    )
-axes[0].plot([0, 1], [0, 1], "k--", lw=0.8, label="무작위")
+    )  # x축이 재현율, y축이 정밀도인 PR 곡선
+    # 로지스틱, 랜덤포레스트 두 모델만 골라서 곡선 그림
+axes[0].plot(
+    [0, 1], [0, 1], "k--", lw=0.8, label="무작위"
+)  # 완전히 무작위로 찍는 모델의 ROC 곡선
 axes[0].set_xlabel("거짓양성률 FPR")
 axes[0].set_ylabel("재현율 TPR")
 axes[0].set_title("ROC 곡선 — 좋아 보입니다")
@@ -234,6 +249,8 @@ axes[1].set_title("PR 곡선 — 현실은 이쪽입니다")
 axes[1].legend(fontsize=8)
 fig.tight_layout()
 save(fig, "ai4i_roc_pr")
+# 같은 모델, 같은 데이터여도 어떤 곡선으로 보느냐에 따라 얼마나 좋아 보이는지가 달라질 수 있다.
+# 불균형 데이터일수록 이 차이가 커짐 !
 
 # ----------------------------------------------------------------------
 rule("A2-6. 고장 모드별로 나눠 보면 — 왜 어떤 고장은 못 잡나")
@@ -293,9 +310,18 @@ print("""
 ★ temp_diff / power / wear×torque 는 AI4I의 고장 정의식 그 자체입니다.
   모델을 바꾸는 것보다 '고장이 어떻게 정의되는지'를 아는 게 성능을 올립니다.
   이게 제조 도메인 지식의 값어치입니다.""")
-
+# RandomForest를 XGBoost로 바꾸거나, 하이퍼파라미터를 열심히 튜닝하는 것보다,
+# "이 도메인에서 고장이 어떻게 정의되는지"를 이해하고 그 정의식을 피처로 만들어주는 게 훨씬 효과적
 np.save(RAW.parent / "ai4i_probs.npy", probs["랜덤포레스트"])
 te[["UDI", "prob", "pred", "failure"] + MODES].to_csv(
     RAW.parent / "ai4i_test_pred.csv", index=False
 )
 print("\n저장: data/ai4i_test_pred.csv")
+
+# A2-1: 로드 & 첫 점검 → 컬럼명 정리
+# A2-2: ★ 라벨 검산 → RNF 특이 케이스 발견, 정의 확인 후 원본 그대로 사용
+# A2-3: ★★★ 불균형 → "무조건 정상" 모델의 정확도 96.61% 시연
+# A2-4: 4개 모델 비교 → 정확도 무의미, PR-AUC/고장률 기준선이 진짜 척도
+# A2-5: ROC vs PR 곡선 → 같은 모델도 어떤 곡선으로 보느냐에 따라 인상이 다름
+# A2-6: 모드별 재현율 → RNF는 원천적으로 예측 불가능
+# A2-7: 파생변수 효과 → 도메인 지식(고장 정의식)을 피처로 넣으면 성능 급상승
