@@ -9,6 +9,7 @@ A5. 센서 드리프트 — 학습 시점과 운영 시점의 분포가 달라�
   (2) 있을 때 모델 성능이 얼마나 떨어지는지 재고
   (3) 보정하면 얼마나 회복되는지 확인합니다.
 """
+
 from _common import ROOT, rule, save
 import matplotlib.pyplot as plt
 import numpy as np
@@ -19,7 +20,11 @@ from sklearn.metrics import average_precision_score, f1_score, roc_auc_score
 
 import features as F
 from simulator import simulate_truth, pollute, POLLUTION
-from clean import run_pipeline, estimate_drift, correct_drift
+from clean import (
+    run_pipeline,
+    estimate_drift,
+    correct_drift,
+)  # 드리프트 관련 함수만 따로 떼서 실험
 
 pd.set_option("display.width", 170)
 SEED = 42
@@ -27,6 +32,7 @@ HORIZON = 30
 DAYS = 14
 
 
+# 준비 : 라벨 생성 - 피처 생성 - 결측 제거 함수
 def prep(df, horizon=HORIZON):
     df = F.make_horizon_label(df, horizon=horizon)
     df = F.build(df, windows=(10, 30, 60), shift_one=True)
@@ -36,15 +42,24 @@ def prep(df, horizon=HORIZON):
 
 
 def split_eval(d, feat, frac=0.75, seed=SEED):
-    n = len(d); cut = int(n * frac)
-    X = d[feat].values; y = d["y"].values.astype(int)
-    m = RandomForestClassifier(n_estimators=200, random_state=seed, n_jobs=-1,
-                               min_samples_leaf=2).fit(X[:cut], y[:cut])
+    n = len(d)
+    cut = int(n * frac)
+    X = d[feat].values
+    y = d["y"].values.astype(int)
+    m = RandomForestClassifier(
+        n_estimators=200, random_state=seed, n_jobs=-1, min_samples_leaf=2
+    ).fit(X[:cut], y[:cut])
     p = m.predict_proba(X[cut:])[:, 1]
     yt = y[cut:]
-    return {"ROC-AUC": round(roc_auc_score(yt, p), 4),
+    return (
+        {
+            "ROC-AUC": round(roc_auc_score(yt, p), 4),
             "PR-AUC": round(average_precision_score(yt, p), 4),
-            "F1@0.5": round(f1_score(yt, (p >= 0.5).astype(int), zero_division=0), 4)}, m, p
+            "F1@0.5": round(f1_score(yt, (p >= 0.5).astype(int), zero_division=0), 4),
+        },
+        m,
+        p,
+    )
 
 
 # ======================================================================
@@ -52,14 +67,19 @@ rule("A5-1. 드리프트는 눈으로 잘 안 보입니다")
 truth = simulate_truth(n_minutes=1440 * DAYS, start="2024-01-01", seed=SEED)
 obs = pollute(truth, seed=7)
 print(f"주입한 드리프트: CNC-02 공정온도 센서 {POLLUTION['drift_per_day']} K/day")
-print(f"  → {DAYS}일이면 총 {POLLUTION['drift_per_day']*DAYS:.1f} K 밀립니다.")
-print(f"  참고: 공정온도의 자연 표준편차는 {truth['process_temp_k'].std():.2f} K입니다.")
+print(f"  → {DAYS}일이면 총 {POLLUTION['drift_per_day'] * DAYS:.1f} K 밀립니다.")
+print(
+    f"  참고: 공정온도의 자연 표준편차는 {truth['process_temp_k'].std():.2f} K입니다."
+)
 print("""
 ★ 하루에 0.35 K씩입니다. 하루치만 보면 노이즈에 묻혀 절대 안 보입니다.
   2주가 쌓여야 4.9 K — 그제서야 '뭔가 이상한데?'가 됩니다.
   그래서 드리프트는 '긴 구간을 모아 봐야' 보입니다. 일별 집계가 필수입니다.""")
 
-clean_corr, log, rep0 = run_pipeline(obs, verbose=False)   # 파이프라인은 한 번만 돌립니다
+# 정제 파이프라인 한 번 실행 -> 드리프트가 이미 보정된 데이터를 얻음
+clean_corr, log, rep0 = run_pipeline(
+    obs, verbose=False
+)  # 파이프라인은 한 번만 돌립니다
 
 # 보정을 되돌려 '보정 안 한 버전'을 만듭니다 (동일 조건 비교용)
 t0 = clean_corr["ts"].min()
@@ -68,10 +88,13 @@ uncorr = clean_corr.copy()
 for mid, s in rep0["drift_applied"].items():
     if s:
         mask = uncorr["machine_id"] == mid
-        uncorr.loc[mask, "process_temp_k"] = uncorr.loc[mask, "process_temp_k"] + s * days_all[mask]
+        uncorr.loc[mask, "process_temp_k"] = (
+            uncorr.loc[mask, "process_temp_k"] + s * days_all[mask]
+        )
 
 # ----------------------------------------------------------------------
 rule("A5-2. 탐지 — 일별 집계 + 회귀 기울기 검정")
+# 드리프트 되돌린 데이터로 시작
 d = uncorr.dropna(subset=["process_temp_k", "air_temp_k"]).copy()
 d["diff"] = d["process_temp_k"] - d["air_temp_k"]
 d["day"] = ((d["ts"] - d["ts"].min()).dt.total_seconds() / 86400.0).astype(int)
@@ -84,10 +107,16 @@ print("\n[선형회귀 기울기 검정]")
 rows = []
 for mid, g in daily.groupby("machine_id"):
     lr = stats.linregress(g["day"], g["diff"])
-    rows.append({"설비": mid, "기울기(K/day)": round(lr.slope, 4),
-                 "표준오차": round(lr.stderr, 4),
-                 "t": round(lr.slope / lr.stderr, 2),
-                 "p값": f"{lr.pvalue:.2e}", "R²": round(lr.rvalue ** 2, 3)})
+    rows.append(
+        {
+            "설비": mid,
+            "기울기(K/day)": round(lr.slope, 4),
+            "표준오차": round(lr.stderr, 4),
+            "t": round(lr.slope / lr.stderr, 2),
+            "p값": f"{lr.pvalue:.2e}",
+            "R²": round(lr.rvalue**2, 3),
+        }
+    )
 print(pd.DataFrame(rows).to_string(index=False))
 print(f"""
 ★ CNC-02만 기울기가 유의하게 0이 아닙니다. 나머지 둘은 0 근처입니다.
@@ -95,8 +124,8 @@ print(f"""
   (공정이 변했다면 세 대가 같이 움직였을 겁니다)
 
 ★ 라인 중앙값을 기준선으로 잡고 잔차의 기울기를 재면 추정값은
-  {rep0['drift_slopes']['CNC-02']:.4f} K/day — 참값 {POLLUTION['drift_per_day']} K/day와
-  오차 {abs(rep0['drift_slopes']['CNC-02']-POLLUTION['drift_per_day'])/POLLUTION['drift_per_day']*100:.1f}%입니다.""")
+  {rep0["drift_slopes"]["CNC-02"]:.4f} K/day — 참값 {POLLUTION["drift_per_day"]} K/day와
+  오차 {abs(rep0["drift_slopes"]["CNC-02"] - POLLUTION["drift_per_day"]) / POLLUTION["drift_per_day"] * 100:.1f}%입니다.""")
 
 print("\n[분포 이동 검정 — 전반부 7일 vs 후반부 7일, KS 검정]")
 ks_rows = []
@@ -106,10 +135,17 @@ for mid, g in uncorr.groupby("machine_id"):
     a = g.loc[g["ts"] < half, "process_temp_k"]
     b = g.loc[g["ts"] >= half, "process_temp_k"]
     ks = stats.ks_2samp(a, b)
-    ks_rows.append({"설비": mid, "전반부 평균": round(a.mean(), 2),
-                    "후반부 평균": round(b.mean(), 2),
-                    "차이": round(b.mean() - a.mean(), 2),
-                    "KS통계량": round(ks.statistic, 4), "p값": f"{ks.pvalue:.2e}"})
+    ks_rows.append(
+        {
+            "설비": mid,
+            "전반부 평균": round(a.mean(), 2),
+            "후반부 평균": round(b.mean(), 2),
+            "차이": round(b.mean() - a.mean(), 2),
+            "KS통계량": round(ks.statistic, 4),
+            "p값": f"{ks.pvalue:.2e}",
+        }
+    )
+    # 전반부(1~7일)와 후반부(8~14일) 두 그룹의 분포 자체가 다른지 검정
 print(pd.DataFrame(ks_rows).to_string(index=False))
 print("""
 ★ 주의: KS 검정은 표본이 크면 아주 작은 차이도 p<0.001로 만듭니다.
@@ -122,8 +158,11 @@ d_un, feat = prep(uncorr)
 d_co, feat2 = prep(clean_corr)
 r_un, _, _ = split_eval(d_un, feat)
 r_co, _, _ = split_eval(d_co, feat2)
-print(pd.DataFrame([dict(데이터="드리프트 방치", **r_un),
-                    dict(데이터="드리프트 보정", **r_co)]).to_string(index=False))
+print(
+    pd.DataFrame(
+        [dict(데이터="드리프트 방치", **r_un), dict(데이터="드리프트 보정", **r_co)]
+    ).to_string(index=False)
+)
 
 # CNC-02만 따로
 print("\n[CNC-02만 떼어서 — 드리프트가 있는 그 설비]")
@@ -131,19 +170,22 @@ sub_un = d_un[d_un["machine_id"] == "CNC-02"].reset_index(drop=True)
 sub_co = d_co[d_co["machine_id"] == "CNC-02"].reset_index(drop=True)
 r2_un, _, _ = split_eval(sub_un, feat)
 r2_co, _, _ = split_eval(sub_co, feat2)
-print(pd.DataFrame([dict(데이터="드리프트 방치", **r2_un),
-                    dict(데이터="드리프트 보정", **r2_co)]).to_string(index=False))
+print(
+    pd.DataFrame(
+        [dict(데이터="드리프트 방치", **r2_un), dict(데이터="드리프트 보정", **r2_co)]
+    ).to_string(index=False)
+)
 gain = (r2_co["PR-AUC"] - r2_un["PR-AUC"]) / max(r2_un["PR-AUC"], 1e-9) * 100
 print(f"""
 ★★★ 예상과 반대 결과입니다. 그대로 싣습니다.
    드리프트를 보정했더니 모델 성능이 오히려 조금 '떨어졌습니다'.
-     전체    PR-AUC {r_un['PR-AUC']:.4f} → {r_co['PR-AUC']:.4f}
-     CNC-02  PR-AUC {r2_un['PR-AUC']:.4f} → {r2_co['PR-AUC']:.4f} ({gain:+.1f}%)
+     전체    PR-AUC {r_un["PR-AUC"]:.4f} → {r_co["PR-AUC"]:.4f}
+     CNC-02  PR-AUC {r2_un["PR-AUC"]:.4f} → {r2_co["PR-AUC"]:.4f} ({gain:+.1f}%)
 
    왜 그런가 — 두 가지로 봅니다.
    1) 트리 모델은 '시간에 따라 단조 증가하는 편향'을 다른 피처와 조합해
       스스로 흡수합니다. 보정해 준다고 크게 득 볼 게 없습니다.
-   2) 보정은 추정값(기울기 {rep0['drift_slopes']['CNC-02']:.4f})을 빼는 작업이라
+   2) 보정은 추정값(기울기 {rep0["drift_slopes"]["CNC-02"]:.4f})을 빼는 작업이라
       추정 오차만큼 새 잡음이 들어갑니다. 이득보다 잡음이 컸습니다.
    ※ 차이가 작아서 '보정이 해롭다'고 단정할 수는 없습니다.
      seed를 바꾸면 부호가 뒤집힐 수 있는 크기입니다. 그 점도 밝혀 둡니다.
@@ -153,17 +195,24 @@ print(f"""
 
 # ----------------------------------------------------------------------
 rule("A5-4. 고정 임계값 경보가 드리프트에 어떻게 무너지는가")
-th = 315.0
+th = 315.0  # 가상의 공정온도가 315K를 넘으면 경보를 울린다는 고정 임계값 규칙 설정
 al = []
 for name, frame in [("보정 안 함", uncorr), ("보정 함", clean_corr)]:
     g = frame.dropna(subset=["process_temp_k"]).copy()
-    g["week"] = np.where((g["ts"] - g["ts"].min()).dt.days < DAYS // 2, "1주차", "2주차")
+    g["week"] = np.where(
+        (g["ts"] - g["ts"].min()).dt.days < DAYS // 2, "1주차", "2주차"
+    )
     for mid in ["CNC-01", "CNC-02", "CNC-03"]:
         s = g[g["machine_id"] == mid]
         r = s.groupby("week")["process_temp_k"].apply(lambda x: (x > th).mean() * 100)
-        al.append({"데이터": name, "설비": mid,
-                   "1주차 경보율%": round(r.get("1주차", np.nan), 2),
-                   "2주차 경보율%": round(r.get("2주차", np.nan), 2)})
+        al.append(
+            {
+                "데이터": name,
+                "설비": mid,
+                "1주차 경보율%": round(r.get("1주차", np.nan), 2),
+                "2주차 경보율%": round(r.get("2주차", np.nan), 2),
+            }
+        )
 alarm = pd.DataFrame(al)
 print(f"[공정온도 {th} K 초과 경보 발생률]")
 print(alarm.to_string(index=False))
@@ -172,6 +221,7 @@ print("""
    설비는 멀쩡한데 센서가 밀려서 나는 '가짜 경보'입니다.
    현장에서 이런 일이 반복되면 작업자가 경보를 꺼버립니다.
    → 그다음 진짜 고장이 나면 아무도 모릅니다. 이게 드리프트가 무서운 진짜 이유입니다.""")
+# 단순한 고정 임계값 규칙에서는 스스로 드리프트 대응 못 하기 때문에 드리프트 보정이 필수적!
 
 # ----------------------------------------------------------------------
 rule("A5-5. 그림")
@@ -180,23 +230,49 @@ for mid, g in daily.groupby("machine_id"):
     axes[0].plot(g["day"], g["diff"], marker="o", ms=4, label=mid)
     lr = stats.linregress(g["day"], g["diff"])
     axes[0].plot(g["day"], lr.intercept + lr.slope * g["day"], ls="--", lw=1, alpha=0.7)
-axes[0].set_xlabel("경과 일"); axes[0].set_ylabel("공정온도 - 공기온도 (K)")
+axes[0].set_xlabel("경과 일")
+axes[0].set_ylabel("공정온도 - 공기온도 (K)")
 axes[0].set_title("일별 중앙값 — CNC-02만 우상향")
 axes[0].legend(fontsize=8)
 
 for mid, color in [("CNC-02", "#c53030"), ("CNC-01", "#2b6cb0")]:
     g = uncorr[uncorr["machine_id"] == mid].dropna(subset=["process_temp_k"])
     half = g["ts"].min() + pd.Timedelta(days=DAYS // 2)
-    axes[1].hist(g.loc[g["ts"] < half, "process_temp_k"], bins=60, alpha=0.5,
-                 density=True, color=color, label=f"{mid} 1주차")
-    axes[1].hist(g.loc[g["ts"] >= half, "process_temp_k"], bins=60, alpha=0.5,
-                 density=True, histtype="step", lw=1.8, color=color, label=f"{mid} 2주차")
+    axes[1].hist(
+        g.loc[g["ts"] < half, "process_temp_k"],
+        bins=60,
+        alpha=0.5,
+        density=True,
+        color=color,
+        label=f"{mid} 1주차",
+    )
+    axes[1].hist(
+        g.loc[g["ts"] >= half, "process_temp_k"],
+        bins=60,
+        alpha=0.5,
+        density=True,
+        histtype="step",
+        lw=1.8,
+        color=color,
+        label=f"{mid} 2주차",
+    )
 axes[1].set_title("분포 이동 (보정 전)")
-axes[1].set_xlabel("공정온도 (K)"); axes[1].legend(fontsize=7)
+axes[1].set_xlabel("공정온도 (K)")
+axes[1].legend(fontsize=7)
 
-pv = alarm[alarm["데이터"] == "보정 안 함"].set_index("설비")[["1주차 경보율%", "2주차 경보율%"]]
+pv = alarm[alarm["데이터"] == "보정 안 함"].set_index("설비")[
+    ["1주차 경보율%", "2주차 경보율%"]
+]
 pv.plot(kind="bar", ax=axes[2], rot=0, color=["#a0aec0", "#c53030"])
 axes[2].set_title(f"고정 임계값({th}K) 경보율 — 보정 전")
-axes[2].set_ylabel("%"); axes[2].legend(fontsize=8)
+axes[2].set_ylabel("%")
+axes[2].legend(fontsize=8)
 fig.tight_layout()
 save(fig, "drift")
+
+
+# A5-1: 드리프트는 짧게 보면 안 보임 → 일별 집계 필요성 제시
+# A5-2: 회귀 기울기 + KS 검정으로 통계적 탐지 → CNC-02만 유의미
+# A5-3: ★ 반전 — 보정해도 모델 성능은 오히려 살짝 하락 (정직하게 보고)
+# A5-4: 고정 임계값 경보는 드리프트에 완전히 무너짐 → 알람 피로 문제로 이어짐
+# A5-5: 그림 → 시각적 증거
